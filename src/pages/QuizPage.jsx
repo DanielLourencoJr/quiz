@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useQuiz } from "../contexts/QuizContext";
 import { useProgress } from "../hooks/useProgress";
 import { getTopicColor } from "../data/defaultQuestions";
@@ -16,31 +16,37 @@ function BackIcon() {
 }
 
 export default function QuizPage() {
-  const { questions } = useQuiz();
-  const { hasAnswered, markAnswered, answeredCount } = useProgress();
-  const navigate = useNavigate();
+  const { questions }                          = useQuiz();
+  const { hasAnswered, markAnswered }          = useProgress();
+  const navigate                               = useNavigate();
+  const location                               = useLocation();
 
-  // Filtra questões ainda não respondidas
-  const pending = useMemo(
-    () => questions.filter(q => !hasAnswered(q.id)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [questions] // recalcula só quando questions muda, não a cada resposta
-  );
+  // Temas selecionados vindos do Home ([] = todos)
+  const selectedTopics = location.state?.topics ?? [];
 
-  const [idx, setIdx]         = useState(0);
-  const [answers, setAnswers] = useState({});
+  const pending = useMemo(() => {
+    return questions.filter(q => {
+      const topicMatch = selectedTopics.length === 0 || selectedTopics.includes(q.topic);
+      return topicMatch && !hasAnswered(q.id);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions]);
+
+  const [idx, setIdx]           = useState(0);
+  const [answers, setAnswers]   = useState({});
   const [revealed, setRevealed] = useState({});
-  const [essays, setEssays]   = useState({});
-  const [models, setModels]   = useState({});
+  const [essays, setEssays]     = useState({});
+  const [models, setModels]     = useState({});
 
-  // Sem questões pendentes
   if (pending.length === 0) {
     return (
       <div className="page" style={{ alignItems: "center", justifyContent: "center", textAlign: "center", gap: "1rem" }}>
         <div style={{ fontSize: "3rem" }}>🎉</div>
         <h2>Tudo respondido!</h2>
         <p style={{ margin: "0.5rem 0 1.5rem" }}>
-          Você já respondeu todas as questões disponíveis.
+          {selectedTopics.length > 0
+            ? "Você já respondeu todas as questões dos temas selecionados."
+            : "Você já respondeu todas as questões disponíveis."}
         </p>
         <button className="btn btn-primary" onClick={() => navigate("/")}>← Voltar ao Início</button>
       </div>
@@ -63,11 +69,8 @@ export default function QuizPage() {
   }
 
   function goNext() {
-    // Marca como respondida ao avançar (ou finalizar)
     markAnswered(q.id);
-
     if (isLast) {
-      // Marca a última antes de ir para resultados
       navigate("/results", { state: { answers, essays, questions: pending } });
     } else {
       setIdx(i => i + 1);
@@ -91,6 +94,11 @@ export default function QuizPage() {
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.35rem" }}>
             <span style={{ fontSize: "0.8rem", color: "var(--text3)", fontWeight: 600 }}>
               {idx + 1} / {total}
+              {selectedTopics.length > 0 && (
+                <span style={{ color: "var(--text3)", fontWeight: 400 }}>
+                  {" "}· {selectedTopics.length} tema{selectedTopics.length !== 1 ? "s" : ""}
+                </span>
+              )}
             </span>
             <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>
               {Math.round(progress)}%
@@ -126,9 +134,9 @@ export default function QuizPage() {
               const isSel   = chosen === i;
               let cls = "answer-btn";
               if (isRevealed) {
-                if (isRight)     cls += " correct";
-                else if (isSel)  cls += " wrong";
-              } else if (isSel)  cls += " selected";
+                if (isRight)    cls += " correct";
+                else if (isSel) cls += " wrong";
+              } else if (isSel) cls += " selected";
 
               return (
                 <button key={i} className={cls} onClick={() => answer(i)} disabled={isRevealed}>
@@ -150,9 +158,9 @@ export default function QuizPage() {
               const isSel   = chosen === val;
               let cls = "tf-btn";
               if (isRevealed) {
-                if (isRight)     cls += " correct";
-                else if (isSel)  cls += " wrong";
-              } else if (isSel)  cls += " selected";
+                if (isRight)    cls += " correct";
+                else if (isSel) cls += " wrong";
+              } else if (isSel) cls += " selected";
 
               return (
                 <button key={String(val)} className={cls} onClick={() => answer(val)} disabled={isRevealed}>
@@ -223,7 +231,7 @@ export default function QuizPage() {
           </div>
         )}
 
-        {/* Nav buttons */}
+        {/* Nav */}
         <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.5rem" }}>
           {idx > 0 && (
             <button className="btn btn-ghost" onClick={goPrev} style={{ flex: "none" }}>

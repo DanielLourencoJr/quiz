@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuiz } from "../contexts/QuizContext";
 import { useProgress } from "../hooks/useProgress";
@@ -5,14 +6,32 @@ import { getTopicColor } from "../data/defaultQuestions";
 
 export default function Home() {
   const { questions, stats, topics, loading, error, refresh } = useQuiz();
-  const { answeredCount, resetProgress } = useProgress();
+  const { answeredCount, resetProgress, hasAnswered } = useProgress();
   const navigate = useNavigate();
+
+  const [selectedTopics, setSelectedTopics] = useState([]); // [] = todos
 
   const remaining = questions.length - answeredCount;
   const allDone   = questions.length > 0 && remaining === 0;
   const pct       = questions.length > 0
     ? Math.round((answeredCount / questions.length) * 100)
     : 0;
+
+  // Questões filtradas pelo tema selecionado e não respondidas
+  const filteredPending = questions.filter(q => {
+    const topicMatch = selectedTopics.length === 0 || selectedTopics.includes(q.topic);
+    return topicMatch && !hasAnswered(q.id);
+  });
+
+  function toggleTopic(t) {
+    setSelectedTopics(prev =>
+      prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]
+    );
+  }
+
+  function handleStart() {
+    navigate("/quiz", { state: { topics: selectedTopics } });
+  }
 
   if (loading) {
     return (
@@ -48,7 +67,7 @@ export default function Home() {
       {questions.length > 0 && (
         <div className="card" style={{ marginBottom: "1.5rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
-            <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text2)" }}>Seu progresso</span>
+            <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text2)" }}>Seu progresso geral</span>
             <span style={{ fontSize: "0.85rem", fontWeight: 700, color: allDone ? "var(--green)" : "var(--blue)" }}>
               {answeredCount} / {questions.length}
             </span>
@@ -96,40 +115,115 @@ export default function Home() {
         ))}
       </div>
 
-      {/* Topics */}
+      {/* Topic selector */}
       {topics.length > 0 && (
         <div style={{ marginBottom: "1.5rem" }}>
-          <h3 style={{ marginBottom: "0.75rem", color: "var(--text2)", fontSize: "0.8rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>Temas</h3>
-          <div className="home-badges">
-            {topics.map(t => (
-              <span key={t} className="tag" style={{
-                background: getTopicColor(t) + "20",
-                color: getTopicColor(t),
-                border: `1px solid ${getTopicColor(t)}40`,
-              }}>{t}</span>
-            ))}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+            <h3 style={{ color: "var(--text2)", fontSize: "0.8rem", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Escolher temas
+            </h3>
+            {selectedTopics.length > 0 && (
+              <button
+                onClick={() => setSelectedTopics([])}
+                style={{ fontSize: "0.75rem", color: "var(--text3)", cursor: "pointer", fontWeight: 600 }}
+              >
+                Limpar seleção
+              </button>
+            )}
           </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {topics.map(t => {
+              const color      = getTopicColor(t);
+              const isSelected = selectedTopics.includes(t);
+              const total      = questions.filter(q => q.topic === t).length;
+              const done       = questions.filter(q => q.topic === t && hasAnswered(q.id)).length;
+              const topicPct   = total > 0 ? Math.round((done / total) * 100) : 0;
+              const topicDone  = done === total;
+
+              return (
+                <button
+                  key={t}
+                  onClick={() => toggleTopic(t)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    padding: "0.85rem 1rem",
+                    borderRadius: "var(--radius)",
+                    border: `2px solid ${isSelected ? color : "var(--border)"}`,
+                    background: isSelected ? color + "15" : "var(--card)",
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                    textAlign: "left",
+                  }}
+                >
+                  {/* Color dot */}
+                  <div style={{
+                    width: 12, height: 12, borderRadius: "50%", flexShrink: 0,
+                    background: color,
+                    boxShadow: isSelected ? `0 0 8px ${color}80` : "none",
+                  }} />
+
+                  {/* Name + mini progress */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: "0.875rem", fontWeight: 600,
+                      color: isSelected ? color : "var(--text)",
+                      marginBottom: "0.3rem",
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>
+                      {t}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <div style={{ flex: 1, height: 4, borderRadius: 99, background: "var(--border)" }}>
+                        <div style={{
+                          height: "100%", borderRadius: 99,
+                          width: `${topicPct}%`,
+                          background: topicDone ? "var(--green)" : color,
+                          transition: "width 0.3s",
+                        }} />
+                      </div>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text3)", whiteSpace: "nowrap" }}>
+                        {done}/{total}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Check or done */}
+                  <div style={{
+                    width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                    border: `2px solid ${isSelected ? color : "var(--border)"}`,
+                    background: isSelected ? color : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: "0.7rem", color: "#fff", fontWeight: 700,
+                    transition: "all 0.15s",
+                  }}>
+                    {topicDone ? "✓" : isSelected ? "✓" : ""}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Selected summary */}
+          {selectedTopics.length > 0 && (
+            <div style={{
+              marginTop: "0.75rem", padding: "0.6rem 0.9rem",
+              borderRadius: "var(--radius-sm)", background: "var(--bg3)",
+              border: "1px solid var(--border)",
+              fontSize: "0.8rem", color: "var(--text2)",
+            }}>
+              {filteredPending.length === 0
+                ? "✅ Todos os temas selecionados já foram respondidos!"
+                : `📚 ${filteredPending.length} questões${filteredPending.length !== 1 ? "" : ""} disponíveis${filteredPending.length !== 1 ? "" : ""} nos temas selecionados`}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Type breakdown */}
-      <div className="card" style={{ marginBottom: "1.5rem" }}>
-        <h3 style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>Tipos de questão</h3>
-        {[
-          { label: "Múltipla Escolha",    count: stats.mc,    icon: "◉", color: "var(--blue)" },
-          { label: "Verdadeiro ou Falso", count: stats.tf,    icon: "⊙", color: "var(--purple)" },
-          { label: "Dissertativas",       count: stats.essay, icon: "✎", color: "var(--pink)" },
-        ].map(r => (
-          <div key={r.label} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.5rem 0", borderBottom: "1px solid var(--border)" }}>
-            <span style={{ color: r.color, fontSize: "1.1rem", width: "1.2rem" }}>{r.icon}</span>
-            <span style={{ flex: 1, fontSize: "0.9rem" }}>{r.label}</span>
-            <span style={{ fontWeight: 700, color: r.color }}>{r.count}</span>
-          </div>
-        ))}
-      </div>
-
       {/* CTA */}
-      {allDone ? (
+      {allDone && selectedTopics.length === 0 ? (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           <div className="card" style={{ textAlign: "center", padding: "1.25rem", background: "rgba(16,185,129,0.08)", borderColor: "var(--green)" }}>
             <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>🎉</div>
@@ -144,15 +238,19 @@ export default function Home() {
       ) : (
         <button
           className="btn btn-primary btn-full"
-          onClick={() => navigate("/quiz")}
-          disabled={questions.length === 0}
+          onClick={handleStart}
+          disabled={questions.length === 0 || filteredPending.length === 0}
           style={{ fontSize: "1.05rem" }}
         >
           {questions.length === 0
             ? "Nenhuma questão cadastrada"
-            : answeredCount > 0
-              ? `Continuar Quiz → (${remaining} restante${remaining !== 1 ? "s" : ""})`
-              : "Começar Quiz →"}
+            : filteredPending.length === 0
+              ? "✅ Temas selecionados já respondidos"
+              : selectedTopics.length > 0
+                ? `Começar — ${selectedTopics.length} tema${selectedTopics.length !== 1 ? "s" : ""} selecionado${selectedTopics.length !== 1 ? "s" : ""} →`
+                : answeredCount > 0
+                  ? `Continuar Quiz → (${remaining} restante${remaining !== 1 ? "s" : ""})`
+                  : "Começar Quiz →"}
         </button>
       )}
 
