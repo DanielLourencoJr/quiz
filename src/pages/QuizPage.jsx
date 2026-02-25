@@ -1,6 +1,7 @@
-import { useState, useRef } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuiz } from "../contexts/QuizContext";
+import { useProgress } from "../hooks/useProgress";
 import { getTopicColor } from "../data/defaultQuestions";
 
 const TYPE_LABEL = { mc: "Múltipla Escolha", tf: "Verdadeiro ou Falso", essay: "Dissertativa" };
@@ -16,30 +17,44 @@ function BackIcon() {
 
 export default function QuizPage() {
   const { questions } = useQuiz();
+  const { hasAnswered, markAnswered, answeredCount } = useProgress();
   const navigate = useNavigate();
 
-  const [idx, setIdx]           = useState(0);
-  const [answers, setAnswers]   = useState({});   // id → value
-  const [revealed, setRevealed] = useState({});   // id → bool
-  const [essays, setEssays]     = useState({});   // id → string
-  const [models, setModels]     = useState({});   // id → bool (show model answer)
+  // Filtra questões ainda não respondidas
+  const pending = useMemo(
+    () => questions.filter(q => !hasAnswered(q.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [questions] // recalcula só quando questions muda, não a cada resposta
+  );
 
-  const q = questions[idx];
-  if (!q) {
+  const [idx, setIdx]         = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [revealed, setRevealed] = useState({});
+  const [essays, setEssays]   = useState({});
+  const [models, setModels]   = useState({});
+
+  // Sem questões pendentes
+  if (pending.length === 0) {
     return (
-      <div className="page" style={{ alignItems: "center", justifyContent: "center", textAlign: "center" }}>
-        <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>😕</div>
-        <h2>Nenhuma questão disponível</h2>
-        <p style={{ margin: "0.5rem 0 1.5rem" }}>Adicione questões no painel Admin.</p>
-        <button className="btn btn-primary" onClick={() => navigate("/")}>Voltar ao Início</button>
+      <div className="page" style={{ alignItems: "center", justifyContent: "center", textAlign: "center", gap: "1rem" }}>
+        <div style={{ fontSize: "3rem" }}>🎉</div>
+        <h2>Tudo respondido!</h2>
+        <p style={{ margin: "0.5rem 0 1.5rem" }}>
+          Você já respondeu todas as questões disponíveis.
+        </p>
+        <button className="btn btn-primary" onClick={() => navigate("/")}>← Voltar ao Início</button>
       </div>
     );
   }
 
-  const total     = questions.length;
-  const progress  = ((idx) / total) * 100;
+  const q          = pending[idx];
+  const total      = pending.length;
+  const progress   = (idx / total) * 100;
   const topicColor = getTopicColor(q.topic);
-  const isLast    = idx === total - 1;
+  const isLast     = idx === total - 1;
+  const isRevealed = !!revealed[q.id];
+  const chosen     = answers[q.id];
+  const isCorrect  = isRevealed && chosen === q.answer;
 
   function answer(val) {
     if (revealed[q.id]) return;
@@ -48,8 +63,12 @@ export default function QuizPage() {
   }
 
   function goNext() {
+    // Marca como respondida ao avançar (ou finalizar)
+    markAnswered(q.id);
+
     if (isLast) {
-      navigate("/results", { state: { answers, essays, questions } });
+      // Marca a última antes de ir para resultados
+      navigate("/results", { state: { answers, essays, questions: pending } });
     } else {
       setIdx(i => i + 1);
       window.scrollTo(0, 0);
@@ -59,10 +78,6 @@ export default function QuizPage() {
   function goPrev() {
     if (idx > 0) { setIdx(i => i - 1); window.scrollTo(0, 0); }
   }
-
-  const isRevealed = !!revealed[q.id];
-  const chosen     = answers[q.id];
-  const isCorrect  = isRevealed && chosen === q.answer;
 
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -100,22 +115,20 @@ export default function QuizPage() {
 
         {/* Question */}
         <div className="card" style={{ borderLeft: `3px solid ${topicColor}`, marginBottom: "1rem" }}>
-          <p style={{ color: "var(--text)", fontSize: "1rem", lineHeight: "1.65" }}>
-            {q.question}
-          </p>
+          <p style={{ color: "var(--text)", fontSize: "1rem", lineHeight: "1.65" }}>{q.question}</p>
         </div>
 
-        {/* ── Multiple Choice ── */}
+        {/* Multiple Choice */}
         {q.type === "mc" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
             {q.options.map((opt, i) => {
-              const isRight  = i === q.answer;
-              const isSel    = chosen === i;
+              const isRight = i === q.answer;
+              const isSel   = chosen === i;
               let cls = "answer-btn";
               if (isRevealed) {
-                if (isRight)          cls += " correct";
-                else if (isSel)       cls += " wrong";
-              } else if (isSel)       cls += " selected";
+                if (isRight)     cls += " correct";
+                else if (isSel)  cls += " wrong";
+              } else if (isSel)  cls += " selected";
 
               return (
                 <button key={i} className={cls} onClick={() => answer(i)} disabled={isRevealed}>
@@ -129,7 +142,7 @@ export default function QuizPage() {
           </div>
         )}
 
-        {/* ── True / False ── */}
+        {/* True / False */}
         {q.type === "tf" && (
           <div className="tf-grid">
             {[true, false].map(val => {
@@ -137,9 +150,9 @@ export default function QuizPage() {
               const isSel   = chosen === val;
               let cls = "tf-btn";
               if (isRevealed) {
-                if (isRight)    cls += " correct";
-                else if (isSel) cls += " wrong";
-              } else if (isSel) cls += " selected";
+                if (isRight)     cls += " correct";
+                else if (isSel)  cls += " wrong";
+              } else if (isSel)  cls += " selected";
 
               return (
                 <button key={String(val)} className={cls} onClick={() => answer(val)} disabled={isRevealed}>
@@ -151,7 +164,7 @@ export default function QuizPage() {
           </div>
         )}
 
-        {/* ── Essay ── */}
+        {/* Essay */}
         {q.type === "essay" && (
           <div>
             {q.tips?.length > 0 && (
@@ -166,18 +179,13 @@ export default function QuizPage() {
                 ))}
               </div>
             )}
-
             <textarea
               value={essays[q.id] || ""}
               onChange={e => setEssays(a => ({ ...a, [q.id]: e.target.value }))}
               placeholder="Escreva sua resposta aqui..."
               rows={5}
-              style={{
-                borderColor: essays[q.id]?.trim() ? topicColor + "80" : undefined,
-                marginBottom: "0.5rem",
-              }}
+              style={{ borderColor: essays[q.id]?.trim() ? topicColor + "80" : undefined, marginBottom: "0.5rem" }}
             />
-
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
               <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>
                 {(essays[q.id] || "").trim().split(/\s+/).filter(Boolean).length} palavras
@@ -196,7 +204,6 @@ export default function QuizPage() {
                 </button>
               )}
             </div>
-
             {models[q.id] && q.model && (
               <div className="card" style={{ background: topicColor + "15", borderColor: topicColor + "40" }}>
                 <div style={{ fontSize: "0.75rem", color: topicColor, fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.5rem" }}>
@@ -216,7 +223,7 @@ export default function QuizPage() {
           </div>
         )}
 
-        {/* Nav */}
+        {/* Nav buttons */}
         <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.5rem" }}>
           {idx > 0 && (
             <button className="btn btn-ghost" onClick={goPrev} style={{ flex: "none" }}>
@@ -239,7 +246,7 @@ export default function QuizPage() {
 
         {/* Dot nav */}
         <div style={{ display: "flex", justifyContent: "center", gap: "4px", marginTop: "1rem", flexWrap: "wrap" }}>
-          {questions.map((qq, i) => {
+          {pending.map((qq, i) => {
             const done = qq.type === "essay"
               ? !!essays[qq.id]?.trim()
               : answers[qq.id] !== undefined;

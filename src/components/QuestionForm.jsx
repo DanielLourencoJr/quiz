@@ -94,12 +94,30 @@ export default function QuestionForm({ initial, onSave, onCancel, submitLabel = 
   function handleSubmit(e) {
     e.preventDefault();
     if (!validate()) return;
+  
     const payload = { ...form };
-    if (form.type !== "mc")    { delete payload.options; delete payload.answer; delete payload.explanation; }
-    if (form.type !== "tf")    { /* answer kept as bool */ }
-    if (form.type !== "essay") { delete payload.tips; delete payload.model; }
-    if (form.type === "mc")    { payload.options = form.options.filter(o => o.trim()); }
-    if (form.type === "essay") { payload.tips = form.tips.filter(t => t.trim()); }
+  
+    if (form.type === "mc") {
+      payload.options     = form.options.filter(o => o.trim());
+      payload.answer      = form.answer; // número (índice)
+      delete payload.tips;
+      delete payload.model;
+    }
+  
+    if (form.type === "tf") {
+      payload.answer      = form.answer; // boolean
+      delete payload.options;
+      delete payload.tips;
+      delete payload.model;
+    }
+  
+    if (form.type === "essay") {
+      payload.tips        = form.tips.filter(t => t.trim());
+      delete payload.options;
+      delete payload.answer;
+      delete payload.explanation;
+    }
+  
     onSave(payload);
   }
 
