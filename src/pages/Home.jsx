@@ -4,12 +4,61 @@ import { useQuiz } from "../contexts/QuizContext";
 import { useProgress } from "../hooks/useProgress";
 import { getTopicColor } from "../data/defaultQuestions";
 
+function ConfirmModal({ onConfirm, onCancel }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "1rem",
+    }}>
+      <div style={{
+        background: "var(--card)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius)", padding: "1.5rem",
+        maxWidth: 320, width: "100%", textAlign: "center",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+      }}>
+        <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>⚠️</div>
+        <h3 style={{ marginBottom: "0.5rem", fontSize: "1rem" }}>Reiniciar progresso?</h3>
+        <p style={{ fontSize: "0.85rem", color: "var(--text3)", marginBottom: "1.25rem", lineHeight: 1.5 }}>
+          Todo o seu histórico de respostas será apagado. Essa ação não pode ser desfeita.
+        </p>
+        <div style={{ display: "flex", gap: "0.6rem" }}>
+          <button
+            onClick={onCancel}
+            style={{
+              flex: 1, padding: "0.65rem",
+              borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
+              background: "var(--bg3)", color: "var(--text2)",
+              fontSize: "0.875rem", fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              flex: 1, padding: "0.65rem",
+              borderRadius: "var(--radius-sm)", border: "none",
+              background: "var(--red)", color: "#fff",
+              fontSize: "0.875rem", fontWeight: 700, cursor: "pointer",
+            }}
+          >
+            🔄 Reiniciar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const { questions, stats, topics, loading, error, refresh } = useQuiz();
   const { answeredCount, resetProgress, hasAnswered } = useProgress();
   const navigate = useNavigate();
 
-  const [selectedTopics, setSelectedTopics] = useState([]); // [] = todos
+  const [selectedTopics, setSelectedTopics] = useState([]);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const remaining = questions.length - answeredCount;
   const allDone   = questions.length > 0 && remaining === 0;
@@ -17,7 +66,6 @@ export default function Home() {
     ? Math.round((answeredCount / questions.length) * 100)
     : 0;
 
-  // Questões filtradas pelo tema selecionado e não respondidas
   const filteredPending = questions.filter(q => {
     const topicMatch = selectedTopics.length === 0 || selectedTopics.includes(q.topic);
     return topicMatch && !hasAnswered(q.id);
@@ -31,6 +79,11 @@ export default function Home() {
 
   function handleStart() {
     navigate("/quiz", { state: { topics: selectedTopics } });
+  }
+
+  function handleResetConfirmed() {
+    resetProgress();
+    setShowConfirm(false);
   }
 
   if (loading) {
@@ -55,6 +108,13 @@ export default function Home() {
 
   return (
     <div className="page">
+      {showConfirm && (
+        <ConfirmModal
+          onConfirm={handleResetConfirmed}
+          onCancel={() => setShowConfirm(false)}
+        />
+      )}
+
       <div className="home-hero">
         <div className="home-icon">⚗️</div>
         <h1>Quiz Interativo</h1>
@@ -89,7 +149,7 @@ export default function Home() {
             </span>
           </div>
           {answeredCount > 0 && (
-            <button onClick={resetProgress} style={{
+            <button onClick={() => setShowConfirm(true)} style={{
               marginTop: "0.75rem", width: "100%", padding: "0.5rem",
               borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
               background: "var(--bg3)", color: "var(--text3)",
@@ -158,14 +218,12 @@ export default function Home() {
                     textAlign: "left",
                   }}
                 >
-                  {/* Color dot */}
                   <div style={{
                     width: 12, height: 12, borderRadius: "50%", flexShrink: 0,
                     background: color,
                     boxShadow: isSelected ? `0 0 8px ${color}80` : "none",
                   }} />
 
-                  {/* Name + mini progress */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
                       fontSize: "0.875rem", fontWeight: 600,
@@ -190,7 +248,6 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Check or done */}
                   <div style={{
                     width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
                     border: `2px solid ${isSelected ? color : "var(--border)"}`,
@@ -206,7 +263,6 @@ export default function Home() {
             })}
           </div>
 
-          {/* Selected summary */}
           {selectedTopics.length > 0 && (
             <div style={{
               marginTop: "0.75rem", padding: "0.6rem 0.9rem",
@@ -216,7 +272,7 @@ export default function Home() {
             }}>
               {filteredPending.length === 0
                 ? "✅ Todos os temas selecionados já foram respondidos!"
-                : `📚 ${filteredPending.length} questões${filteredPending.length !== 1 ? "" : ""} disponíveis${filteredPending.length !== 1 ? "" : ""} nos temas selecionados`}
+                : `📚 ${filteredPending.length} questões disponíveis nos temas selecionados`}
             </div>
           )}
         </div>
@@ -231,7 +287,7 @@ export default function Home() {
               Você respondeu todas as questões disponíveis!
             </p>
           </div>
-          <button className="btn btn-primary btn-full" onClick={resetProgress} style={{ fontSize: "1.05rem" }}>
+          <button className="btn btn-primary btn-full" onClick={() => setShowConfirm(true)} style={{ fontSize: "1.05rem" }}>
             🔄 Recomeçar do zero
           </button>
         </div>
