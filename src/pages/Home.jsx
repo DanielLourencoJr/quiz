@@ -2,9 +2,11 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuiz } from "../contexts/QuizContext";
 import { useProgress } from "../hooks/useProgress";
+import { useUser } from "../contexts/UserContext";
+import { supabase } from "../supabase/supabaseClient";
 import { getTopicColor } from "../data/defaultQuestions";
 
-function ConfirmModal({ onConfirm, onCancel }) {
+function ConfirmModal({ onConfirm, onCancel, loading }) {
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 1000,
@@ -21,30 +23,38 @@ function ConfirmModal({ onConfirm, onCancel }) {
         <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>⚠️</div>
         <h3 style={{ marginBottom: "0.5rem", fontSize: "1rem" }}>Reiniciar progresso?</h3>
         <p style={{ fontSize: "0.85rem", color: "var(--text3)", marginBottom: "1.25rem", lineHeight: 1.5 }}>
-          Todo o seu histórico de respostas será apagado. Essa ação não pode ser desfeita.
+          Todo o seu histórico de respostas e pontuação no ranking serão apagados. Essa ação não pode ser desfeita.
         </p>
         <div style={{ display: "flex", gap: "0.6rem" }}>
           <button
             onClick={onCancel}
+            disabled={loading}
             style={{
               flex: 1, padding: "0.65rem",
               borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
               background: "var(--bg3)", color: "var(--text2)",
               fontSize: "0.875rem", fontWeight: 600, cursor: "pointer",
+              opacity: loading ? 0.5 : 1,
             }}
           >
             Cancelar
           </button>
           <button
             onClick={onConfirm}
+            disabled={loading}
             style={{
               flex: 1, padding: "0.65rem",
               borderRadius: "var(--radius-sm)", border: "none",
               background: "var(--red)", color: "#fff",
               fontSize: "0.875rem", fontWeight: 700, cursor: "pointer",
+              opacity: loading ? 0.5 : 1,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem",
             }}
           >
-            🔄 Reiniciar
+            {loading
+              ? <><span className="spinner" style={{ width: 14, height: 14, borderWidth: 2, borderColor: "#fff3", borderTopColor: "#fff" }} /> Apagando...</>
+              : "🔄 Reiniciar"
+            }
           </button>
         </div>
       </div>
@@ -54,11 +64,14 @@ function ConfirmModal({ onConfirm, onCancel }) {
 
 export default function Home() {
   const { questions, stats, topics, loading, error, refresh } = useQuiz();
-  const { answeredCount, resetProgress, hasAnswered } = useProgress();
-  const navigate = useNavigate();
+  const { answeredCount, resetProgress, hasAnswered }         = useProgress();
+  const { username }                                          = useUser();
+  const navigate                                              = useNavigate();
 
   const [selectedTopics, setSelectedTopics] = useState([]);
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [showConfirm, setShowConfirm]       = useState(false);
+  const [resetting, setResetting]           = useState(false);
+  const [resetError, setResetError]         = useState("");
 
   const remaining = questions.length - answeredCount;
   const allDone   = questions.length > 0 && remaining === 0;
@@ -81,9 +94,36 @@ export default function Home() {
     navigate("/quiz", { state: { topics: selectedTopics } });
   }
 
-  function handleResetConfirmed() {
-    resetProgress();
-    setShowConfirm(false);
+  async function handleResetConfirmed() {
+    console.log("Resetando usuário:", username); // ← adiciona isso
+    setResetting(true);
+    setResetError("");
+
+    try {
+      // Apaga scores do Supabase se o usuário estiver logado
+      if (username) {
+        const { error } = await supabase
+          .from("scores")
+          .delete()
+          .eq("username", username);
+
+        if (error) {
+          console.error("[Home] Erro ao apagar scores:", error);
+          setResetError("Não foi possível apagar o ranking. Tente novamente.");
+          setResetting(false);
+          return;
+        }
+      }
+
+      // Limpa o progresso local
+      resetProgress();
+      setShowConfirm(false);
+    } catch (err) {
+      console.error("[Home] Exceção ao resetar:", err);
+      setResetError("Erro inesperado. Tente novamente.");
+    } finally {
+      setResetting(false);
+    }
   }
 
   if (loading) {
@@ -110,8 +150,9 @@ export default function Home() {
     <div className="page">
       {showConfirm && (
         <ConfirmModal
+          loading={resetting}
           onConfirm={handleResetConfirmed}
-          onCancel={() => setShowConfirm(false)}
+          onCancel={() => { if (!resetting) { setShowConfirm(false); setResetError(""); } }}
         />
       )}
 
@@ -148,15 +189,23 @@ export default function Home() {
               {pct}%
             </span>
           </div>
+
           {answeredCount > 0 && (
-            <button onClick={() => setShowConfirm(true)} style={{
-              marginTop: "0.75rem", width: "100%", padding: "0.5rem",
-              borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
-              background: "var(--bg3)", color: "var(--text3)",
-              fontSize: "0.8rem", fontWeight: 600, cursor: "pointer",
-            }}>
-              🔄 Reiniciar progresso
-            </button>
+            <>
+              <button onClick={() => { setResetError(""); setShowConfirm(true); }} style={{
+                marginTop: "0.75rem", width: "100%", padding: "0.5rem",
+                borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
+                background: "var(--bg3)", color: "var(--text3)",
+                fontSize: "0.8rem", fontWeight: 600, cursor: "pointer",
+              }}>
+                🔄 Reiniciar progresso
+              </button>
+              {resetError && (
+                <p style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--red)", textAlign: "center" }}>
+                  ⚠️ {resetError}
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -164,8 +213,8 @@ export default function Home() {
       {/* Stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.5rem", marginBottom: "1.5rem" }}>
         {[
-          { label: "Total",         val: stats.total,         color: "var(--blue)" },
-          { label: "Objetivas",     val: stats.mc + stats.tf, color: "var(--green)" },
+          { label: "Total",         val: stats.total,         color: "var(--blue)"   },
+          { label: "Objetivas",     val: stats.mc + stats.tf, color: "var(--green)"  },
           { label: "Dissertativas", val: stats.essay,         color: "var(--purple)" },
         ].map(s => (
           <div key={s.label} className="card" style={{ textAlign: "center", padding: "0.9rem 0.5rem" }}>
@@ -206,16 +255,11 @@ export default function Home() {
                   key={t}
                   onClick={() => toggleTopic(t)}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.75rem",
-                    padding: "0.85rem 1rem",
-                    borderRadius: "var(--radius)",
+                    display: "flex", alignItems: "center", gap: "0.75rem",
+                    padding: "0.85rem 1rem", borderRadius: "var(--radius)",
                     border: `2px solid ${isSelected ? color : "var(--border)"}`,
                     background: isSelected ? color + "15" : "var(--card)",
-                    cursor: "pointer",
-                    transition: "all 0.15s",
-                    textAlign: "left",
+                    cursor: "pointer", transition: "all 0.15s", textAlign: "left",
                   }}
                 >
                   <div style={{
@@ -223,7 +267,6 @@ export default function Home() {
                     background: color,
                     boxShadow: isSelected ? `0 0 8px ${color}80` : "none",
                   }} />
-
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
                       fontSize: "0.875rem", fontWeight: 600,
@@ -236,8 +279,7 @@ export default function Home() {
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                       <div style={{ flex: 1, height: 4, borderRadius: 99, background: "var(--border)" }}>
                         <div style={{
-                          height: "100%", borderRadius: 99,
-                          width: `${topicPct}%`,
+                          height: "100%", borderRadius: 99, width: `${topicPct}%`,
                           background: topicDone ? "var(--green)" : color,
                           transition: "width 0.3s",
                         }} />
@@ -247,7 +289,6 @@ export default function Home() {
                       </span>
                     </div>
                   </div>
-
                   <div style={{
                     width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
                     border: `2px solid ${isSelected ? color : "var(--border)"}`,
@@ -287,7 +328,7 @@ export default function Home() {
               Você respondeu todas as questões disponíveis!
             </p>
           </div>
-          <button className="btn btn-primary btn-full" onClick={() => setShowConfirm(true)} style={{ fontSize: "1.05rem" }}>
+          <button className="btn btn-primary btn-full" onClick={() => { setResetError(""); setShowConfirm(true); }} style={{ fontSize: "1.05rem" }}>
             🔄 Recomeçar do zero
           </button>
         </div>

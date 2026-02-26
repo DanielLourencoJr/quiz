@@ -1,8 +1,10 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useQuiz } from "../contexts/QuizContext";
 import { useProgress } from "../hooks/useProgress";
 import { getTopicColor } from "../data/defaultQuestions";
+import { supabase } from "../supabase/supabaseClient";
+import { useUser } from "../contexts/UserContext";
 
 const TYPE_LABEL = { mc: "Múltipla Escolha", tf: "Verdadeiro ou Falso", essay: "Dissertativa" };
 const TYPE_ICON  = { mc: "◉", tf: "⊙", essay: "✎" };
@@ -16,12 +18,12 @@ function BackIcon() {
 }
 
 export default function QuizPage() {
-  const { questions }                          = useQuiz();
-  const { hasAnswered, markAnswered }          = useProgress();
-  const navigate                               = useNavigate();
-  const location                               = useLocation();
+  const { questions }                 = useQuiz();
+  const { hasAnswered, markAnswered } = useProgress();
+  const { username }                  = useUser();
+  const navigate                      = useNavigate();
+  const location                      = useLocation();
 
-  // Temas selecionados vindos do Home ([] = todos)
   const selectedTopics = location.state?.topics ?? [];
 
   const pending = useMemo(() => {
@@ -38,6 +40,104 @@ export default function QuizPage() {
   const [essays, setEssays]     = useState({});
   const [models, setModels]     = useState({});
 
+  // Ref sempre atualizado com o estado mais recente (para uso no cleanup/beforeunload)
+  const stateRef = useRef({ answers: {}, pending, username });
+  useEffect(() => {
+    stateRef.current = { answers, pending, username };
+  }, [answers, pending, username]);
+
+  // Flag para evitar double-save (saída + chegada em Results)
+  const savedRef = useRef(false);
+
+  // ── Função de save parcial ──────────────────────────────────────────────────
+  const savePartial = useCallback(async (currentAnswers, currentPending, currentUsername) => {
+    if (savedRef.current) return;
+
+    const objQs   = currentPending.filter(q => q.type !== "essay");
+    const answered = objQs.filter(q => currentAnswers[q.id] !== undefined);
+
+    // Só salva se houve pelo menos 1 resposta objetiva
+    if (!currentUsername || answered.length === 0) return;
+
+    savedRef.current = true;
+
+    const correct = answered.filter(q => currentAnswers[q.id] === q.answer).length;
+    const total   = answered.length;
+    const topics  = [...new Set(answered.map(q => q.topic))];
+
+    const payload = { username: currentUsername, correct, total, topics };
+    console.log("[QuizPage] Salvando saída parcial:", payload);
+
+    try {
+      const { error } = await supabase.from("scores").insert([payload]);
+      if (error) console.error("[QuizPage] Erro ao salvar parcial:", error);
+      else console.log("[QuizPage] Parcial salvo OK");
+    } catch (err) {
+      console.error("[QuizPage] Exceção ao salvar parcial:", err);
+    }
+  }, []);
+
+  // ── Save síncrono via sendBeacon (para fechar aba/janela) ──────────────────
+  // sendBeacon é o único método que funciona com garantia no beforeunload
+  const saveBeacon = useCallback(() => {
+    if (savedRef.current) return;
+    const { answers: ans, pending: pend, username: user } = stateRef.current;
+
+    const objQs   = pend.filter(q => q.type !== "essay");
+    const answered = objQs.filter(q => ans[q.id] !== undefined);
+    if (!user || answered.length === 0) return;
+
+    savedRef.current = true;
+
+    const correct = answered.filter(q => ans[q.id] === q.answer).length;
+    const total   = answered.length;
+    const topics  = [...new Set(answered.map(q => q.topic))];
+
+    // sendBeacon funciona mesmo durante o unload da página
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    const blob = new Blob(
+      [JSON.stringify({ username: user, correct, total, topics })],
+      { type: "application/json" }
+    );
+    navigator.sendBeacon(
+      `${supabaseUrl}/rest/v1/scores`,
+      // sendBeacon não suporta headers customizados nativamente,
+      // então usamos fetch em keepalive como fallback mais confiável
+    );
+
+    // Fallback keepalive (funciona na maioria dos casos modernos)
+    fetch(`${supabaseUrl}/rest/v1/scores`, {
+      method: "POST",
+      keepalive: true,          // ← chave: mantém a requisição mesmo após unload
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": supabaseKey,
+        "Authorization": `Bearer ${supabaseKey}`,
+        "Prefer": "return=minimal",
+      },
+      body: JSON.stringify({ username: user, correct, total, topics }),
+    }).catch(() => {}); // silencia erros (página pode já estar fechando)
+  }, []);
+
+  // ── Registra os listeners de saída ────────────────────────────────────────
+  useEffect(() => {
+    // Fechar aba / F5 / navegar para outra origem
+    window.addEventListener("beforeunload", saveBeacon);
+
+    return () => {
+      window.removeEventListener("beforeunload", saveBeacon);
+
+      // Navegar para outra rota dentro do app (voltar, ir pro ranking, etc.)
+      // Só salva se ainda não foi salvo (ex: não veio de goNext → Results)
+      const { answers: ans, pending: pend, username: user } = stateRef.current;
+      savePartial(ans, pend, user);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Lógica normal do quiz ─────────────────────────────────────────────────
   if (pending.length === 0) {
     return (
       <div className="page" style={{ alignItems: "center", justifyContent: "center", textAlign: "center", gap: "1rem" }}>
@@ -71,6 +171,8 @@ export default function QuizPage() {
   function goNext() {
     markAnswered(q.id);
     if (isLast) {
+      // Marca como salvo para o cleanup do useEffect não salvar de novo
+      savedRef.current = true;
       navigate("/results", { state: { answers, essays, questions: pending } });
     } else {
       setIdx(i => i + 1);
