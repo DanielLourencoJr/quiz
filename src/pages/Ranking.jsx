@@ -1,9 +1,13 @@
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "../supabase/supabaseClient";
 import { useUser } from "../contexts/UserContext";
+import { useQuiz } from "../contexts/QuizContext";
 import { getTopicColor } from "../data/defaultQuestions";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
+
+// Mínimo de questões respondidas para entrar no ranking de um tema (30%)
+const MIN_PCT_TO_RANK = 0.30;
 
 function pct(correct, total) {
   if (!total) return 0;
@@ -100,11 +104,12 @@ function ScoreRow({ s, rank, isMe }) {
 }
 
 export default function Ranking() {
-  const { username } = useUser();
+  const { username }  = useUser();
+  const { questions } = useQuiz();
   const [allScores, setAllScores] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
-  const [selectedTopic, setSelectedTopic] = useState(""); // "" = geral
+  const [selectedTopic, setSelectedTopic] = useState("");
 
   useEffect(() => { fetchRanking(); }, []);
 
@@ -117,7 +122,7 @@ export default function Ranking() {
         .select("*")
         .order("correct", { ascending: false })
         .order("created_at", { ascending: true })
-        .limit(200);
+        .limit(500);
       if (error) throw error;
       setAllScores(data ?? []);
     } catch {
@@ -127,7 +132,16 @@ export default function Ranking() {
     }
   }
 
-  // Todos os temas que apareceram nos scores
+  // Total de questões objetivas por tema
+  const totalByTopic = useMemo(() => {
+    const map = {};
+    for (const q of questions) {
+      if (q.type === "essay") continue;
+      map[q.topic] = (map[q.topic] ?? 0) + 1;
+    }
+    return map;
+  }, [questions]);
+
   const allTopics = useMemo(() => {
     const set = new Set();
     for (const s of allScores) {
@@ -136,28 +150,20 @@ export default function Ranking() {
     return [...set].sort();
   }, [allScores]);
 
-  // Filtra e agrupa por username
   const scores = useMemo(() => {
-    let rows = allScores;
-
-    if (selectedTopic) {
-      // Só scores que incluem esse tema
-      rows = rows.filter(s => (s.topics ?? []).includes(selectedTopic));
-    }
-
     const map = new Map();
-    for (const row of rows) {
+
+    for (const row of allScores) {
       const existing = map.get(row.username);
 
       if (!selectedTopic) {
-        // Modo Geral: SOMA correct e total de todos os registros do usuário
-        // e acumula todos os temas (sem repetição)
+        // Modo Geral: soma todas as sessões
         if (!existing) {
           map.set(row.username, {
             ...row,
             correct: row.correct,
-            total: row.total,
-            topics: [...(row.topics ?? [])],
+            total:   row.total,
+            topics:  [...(row.topics ?? [])],
           });
         } else {
           existing.correct += row.correct;
@@ -167,25 +173,54 @@ export default function Ranking() {
           }
         }
       } else {
-        // Modo tema: melhor score naquele tema
-        const rowPct = pct(row.correct, row.total);
-        const exPct  = existing ? pct(existing.correct, existing.total) : -1;
-        if (!existing || rowPct > exPct || (rowPct === exPct && row.correct > existing.correct)) {
-          map.set(row.username, row);
+        // Modo tema: soma só sessões que incluem esse tema
+        if (!(row.topics ?? []).includes(selectedTopic)) continue;
+        if (!existing) {
+          map.set(row.username, {
+            ...row,
+            correct: row.correct,
+            total:   row.total,
+            topics:  [...(row.topics ?? [])],
+          });
+        } else {
+          existing.correct += row.correct;
+          existing.total   += row.total;
         }
       }
     }
 
-    return [...map.values()].sort((a, b) => {
+    let entries = [...map.values()];
+
+    // Filtra pelo mínimo de questões no tema selecionado
+    if (selectedTopic) {
+      const topicTotal = totalByTopic[selectedTopic] ?? 0;
+      const minQ       = topicTotal > 0 ? Math.ceil(topicTotal * MIN_PCT_TO_RANK) : 1;
+      entries = entries.filter(s => s.total >= minQ);
+    }
+
+    // Ordena por % → desempate por acertos absolutos
+    return entries.sort((a, b) => {
       const pa = pct(a.correct, a.total);
       const pb = pct(b.correct, b.total);
       if (pb !== pa) return pb - pa;
       return b.correct - a.correct;
     });
-  }, [allScores, selectedTopic]);
+  }, [allScores, selectedTopic, totalByTopic]);
 
-  const myRank = scores.findIndex(s => s.username === username) + 1;
+  const myRank  = scores.findIndex(s => s.username === username) + 1;
   const myScore = myRank > 0 ? scores[myRank - 1] : null;
+
+  const minQForTopic = selectedTopic
+    ? Math.ceil((totalByTopic[selectedTopic] ?? 0) * MIN_PCT_TO_RANK)
+    : 0;
+
+  // Quanto o usuário já fez nesse tema
+  const myDoneInTopic = useMemo(() => {
+    if (!selectedTopic || !username) return 0;
+    return allScores
+      .filter(s => s.username === username && (s.topics ?? []).includes(selectedTopic))
+      .reduce((acc, r) => acc + r.total, 0);
+  }, [allScores, selectedTopic, username]);
 
   return (
     <div className="page">
@@ -199,9 +234,7 @@ export default function Ranking() {
       {/* Topic filter */}
       {allTopics.length > 0 && (
         <div style={{ marginBottom: "1.25rem" }}>
-          <div style={{
-            display: "flex", gap: "0.4rem", flexWrap: "wrap",
-          }}>
+          <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
             <button
               onClick={() => setSelectedTopic("")}
               style={{
@@ -236,6 +269,21 @@ export default function Ranking() {
               );
             })}
           </div>
+
+          {/* Aviso do mínimo */}
+          {selectedTopic && minQForTopic > 0 && (
+            <div style={{
+              marginTop: "0.6rem", fontSize: "0.75rem", color: "var(--text3)",
+              display: "flex", alignItems: "center", gap: "0.4rem",
+            }}>
+              <span>⚡</span>
+              <span>
+                Mínimo para entrar:{" "}
+                <strong style={{ color: "var(--text2)" }}>{minQForTopic} questões</strong>
+                {" "}({Math.round(MIN_PCT_TO_RANK * 100)}% de {totalByTopic[selectedTopic] ?? "?"})
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -254,7 +302,6 @@ export default function Ranking() {
           <p style={{ fontSize: "0.85rem", color: "var(--text2)", marginTop: "0.15rem" }}>
             {myScore.correct} acertos de {myScore.total} questões — {pct(myScore.correct, myScore.total)}%
           </p>
-          {/* Topics done */}
           {(myScore.topics ?? []).length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", justifyContent: "center", marginTop: "0.5rem" }}>
               {myScore.topics.map(t => {
@@ -267,6 +314,38 @@ export default function Ranking() {
                   }}>{t}</span>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Usuário ainda não atingiu o mínimo no tema */}
+      {username && selectedTopic && myRank === 0 && !loading && minQForTopic > 0 && (
+        <div className="card" style={{
+          marginBottom: "1.25rem", textAlign: "center",
+          background: "rgba(245,158,11,0.08)", borderColor: "var(--orange)",
+        }}>
+          <p style={{ fontSize: "0.8rem", color: "var(--orange)", fontWeight: 600 }}>
+            ⚡ Você ainda não entrou neste ranking
+          </p>
+          <p style={{ fontSize: "0.8rem", color: "var(--text3)", marginTop: "0.25rem" }}>
+            {myDoneInTopic > 0
+              ? <>Faltam <strong style={{ color: "var(--text2)" }}>{minQForTopic - myDoneInTopic} questão{minQForTopic - myDoneInTopic !== 1 ? "ões" : ""}</strong> de <strong style={{ color: getTopicColor(selectedTopic) }}>{selectedTopic}</strong> para aparecer aqui.</>
+              : <>Responda pelo menos <strong style={{ color: "var(--text2)" }}>{minQForTopic} questões</strong> de <strong style={{ color: getTopicColor(selectedTopic) }}>{selectedTopic}</strong> para entrar no ranking.</>
+            }
+          </p>
+          {myDoneInTopic > 0 && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <div style={{ height: 4, background: "var(--border)", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: 99,
+                  width: `${Math.min(100, Math.round((myDoneInTopic / minQForTopic) * 100))}%`,
+                  background: "var(--orange)", transition: "width 0.5s",
+                }} />
+              </div>
+              <span style={{ fontSize: "0.7rem", color: "var(--text3)", marginTop: "0.25rem", display: "block" }}>
+                {myDoneInTopic} / {minQForTopic}
+              </span>
             </div>
           )}
         </div>
@@ -304,7 +383,7 @@ export default function Ranking() {
           <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>📭</div>
           <p>
             {selectedTopic
-              ? `Nenhuma pontuação em "${selectedTopic}" ainda.`
+              ? `Ninguém atingiu o mínimo em "${selectedTopic}" ainda.`
               : "Nenhuma pontuação ainda. Seja o primeiro!"}
           </p>
         </div>

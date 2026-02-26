@@ -26,11 +26,13 @@ export default function Results() {
   const R = 46, C = 52, circ = 2 * Math.PI * R;
   const offset = circ * (1 - pct / 100);
 
-  // Salva score no Supabase (só uma vez)
+  // Salva score da sessão no Supabase (só uma vez)
+  // Cada rodada gera um registro separado — o Ranking soma tudo por usuário
   useEffect(() => {
     if (!username || savedRef.current || total === 0) return;
     savedRef.current = true;
 
+    // Temas que apareceram NESSA rodada (podem ser parciais)
     const topicsAnswered = [...new Set(questions.map(q => q.topic))];
 
     supabase.from("scores").insert([{
@@ -54,7 +56,7 @@ export default function Results() {
             {username}
           </p>
         )}
-        <p style={{ fontSize: "0.85rem" }}>Você concluiu o quiz!</p>
+        <p style={{ fontSize: "0.85rem" }}>Sessão concluída!</p>
 
         {/* Score ring */}
         <div className="score-ring" style={{ margin: "1.5rem auto", width: C * 2, height: C * 2 }}>
@@ -73,14 +75,24 @@ export default function Results() {
             <span style={{ fontSize: "0.75rem", color: "var(--text3)" }}>{correct}/{total} obj.</span>
           </div>
         </div>
+
+        {/* Sessão info */}
+        <div style={{
+          display: "inline-flex", alignItems: "center", gap: "0.4rem",
+          background: "var(--bg3)", border: "1px solid var(--border)",
+          borderRadius: "999px", padding: "0.3rem 0.85rem",
+          fontSize: "0.75rem", color: "var(--text3)",
+        }}>
+          📊 Esta sessão foi salva no ranking
+        </div>
       </div>
 
       {/* Stats grid */}
       <div className="results-grid" style={{ marginBottom: "1.5rem" }}>
         {[
-          { label: "Corretas",      val: correct,                                    color: "var(--green)" },
-          { label: "Erradas",       val: total - correct,                            color: "var(--red)" },
-          { label: "Objetivas",     val: total,                                      color: "var(--blue)" },
+          { label: "Corretas",      val: correct,                                         color: "var(--green)" },
+          { label: "Erradas",       val: total - correct,                                 color: "var(--red)" },
+          { label: "Objetivas",     val: total,                                           color: "var(--blue)" },
           { label: "Dissertativas", val: questions.filter(q => q.type === "essay").length, color: "var(--purple)" },
         ].map(s => (
           <div key={s.label} className="result-stat">
@@ -152,7 +164,7 @@ export default function Results() {
           style={{ background: "linear-gradient(135deg,var(--blue),var(--purple))" }}
           onClick={() => navigate("/quiz")}
         >
-          Tentar Novamente
+          Continuar Estudando →
         </button>
         <button className="btn btn-ghost btn-full" onClick={() => navigate("/ranking")}>
           🏆 Ver Ranking
