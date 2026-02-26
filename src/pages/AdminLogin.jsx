@@ -1,18 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
 export default function AdminLogin() {
   const { login, isAdmin } = useAuth();
   const navigate = useNavigate();
-  const [pass, setPass]   = useState("");
-  const [error, setError] = useState("");
+  const [pass, setPass]     = useState("");
+  const [error, setError]   = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (isAdmin) {
-    navigate("/admin/panel");
-    return null;
-  }
+  useEffect(() => {
+    if (isAdmin) navigate("/admin/panel");
+  }, [isAdmin, navigate]);
 
   function handleSubmit(e) {
     e.preventDefault();
