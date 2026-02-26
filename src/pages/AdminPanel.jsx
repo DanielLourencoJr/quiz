@@ -551,6 +551,246 @@ function UsersTab() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// RANKING TAB
+// ══════════════════════════════════════════════════════════════
+function RankingTab() {
+  const [scores, setScores]       = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [selectedTopic, setSelectedTopic] = useState("");
+  const [confirmId, setConfirmId] = useState(null); // score id to delete
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [deleting, setDeleting]   = useState(false);
+  const [search, setSearch]       = useState("");
+
+  useEffect(() => { fetchScores(); }, []);
+
+  async function fetchScores() {
+    setLoading(true);
+    const { data } = await supabase
+      .from("scores")
+      .select("*")
+      .order("created_at", { ascending: false });
+    setScores(data ?? []);
+    setLoading(false);
+  }
+
+  async function handleDelete(id) {
+    setDeleting(true);
+    const { error } = await supabase.from("scores").delete().eq("id", id);
+    if (error) { showToast("Erro ao deletar.", "error"); }
+    else { showToast("Entrada removida.", "success"); }
+    setConfirmId(null);
+    setDeleting(false);
+    fetchScores();
+  }
+
+  async function handleDeleteAll() {
+    setDeleting(true);
+    const ids = filtered.map(s => s.id);
+    const { error } = await supabase.from("scores").delete().in("id", ids);
+    if (error) { showToast("Erro ao limpar ranking.", "error"); }
+    else { showToast(`${ids.length} entrada(s) removida(s).`, "success"); }
+    setConfirmAll(false);
+    setDeleting(false);
+    fetchScores();
+  }
+
+  const allTopics = [...new Set(scores.flatMap(s => s.topics ?? []))].sort();
+
+  const filtered = scores.filter(s => {
+    const topicMatch = !selectedTopic || (s.topics ?? []).includes(selectedTopic);
+    const searchMatch = !search || s.username.toLowerCase().includes(search.toLowerCase());
+    return topicMatch && searchMatch;
+  });
+
+  function pct(c, t) { return t ? Math.round((c / t) * 100) : 0; }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+
+      {/* Stats */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.4rem" }}>
+        {[
+          { label: "Entradas", val: scores.length,                                    color: "var(--text)" },
+          { label: "Jogadores",val: new Set(scores.map(s => s.username)).size,         color: "var(--blue)" },
+          { label: "Filtradas", val: filtered.length,                                  color: "var(--purple)" },
+        ].map(s => (
+          <div key={s.label} className="card" style={{ textAlign: "center", padding: "0.5rem" }}>
+            <div style={{ fontSize: "1.2rem", fontWeight: 700, color: s.color }}>{s.val}</div>
+            <div style={{ fontSize: "0.65rem", color: "var(--text3)" }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <input
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="Buscar jogador..."
+        style={{ fontSize: "0.9rem" }}
+      />
+
+      {allTopics.length > 0 && (
+        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+          <button onClick={() => setSelectedTopic("")} style={{
+            fontSize: "0.72rem", fontWeight: 700, padding: "0.3rem 0.65rem",
+            borderRadius: "999px", cursor: "pointer", transition: "all 0.15s",
+            border: `1.5px solid ${!selectedTopic ? "var(--blue)" : "var(--border)"}`,
+            background: !selectedTopic ? "rgba(59,130,246,0.15)" : "var(--bg3)",
+            color: !selectedTopic ? "var(--blue)" : "var(--text3)",
+          }}>Todos</button>
+          {allTopics.map(t => {
+            const tc = getTopicColor(t);
+            const isActive = selectedTopic === t;
+            return (
+              <button key={t} onClick={() => setSelectedTopic(t)} style={{
+                fontSize: "0.72rem", fontWeight: 700, padding: "0.3rem 0.65rem",
+                borderRadius: "999px", cursor: "pointer", transition: "all 0.15s",
+                border: `1.5px solid ${isActive ? tc : "var(--border)"}`,
+                background: isActive ? tc + "20" : "var(--bg3)",
+                color: isActive ? tc : "var(--text3)",
+              }}>{t}</button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Delete all filtered */}
+      {filtered.length > 0 && (
+        <button
+          className="btn btn-danger"
+          onClick={() => setConfirmAll(true)}
+          style={{ fontSize: "0.82rem", padding: "0.6rem 1rem" }}
+        >
+          <TrashIcon /> Deletar {filtered.length} entrada{filtered.length !== 1 ? "s" : ""} {selectedTopic ? `de "${selectedTopic}"` : ""}
+        </button>
+      )}
+
+      {/* Loading */}
+      {loading && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "1.5rem" }}>
+          <div className="spinner" />
+        </div>
+      )}
+
+      {/* Empty */}
+      {!loading && filtered.length === 0 && (
+        <div style={{ textAlign: "center", padding: "2rem 0", color: "var(--text3)", fontSize: "0.9rem" }}>
+          📭 Nenhuma entrada encontrada.
+        </div>
+      )}
+
+      {/* Rows */}
+      {!loading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+          {filtered.map(s => {
+            const p = pct(s.correct, s.total);
+            return (
+              <div key={s.id} style={{
+                display: "flex", alignItems: "center", gap: "0.75rem",
+                padding: "0.75rem 1rem", borderRadius: "var(--radius)",
+                background: "var(--card)", border: "1px solid var(--border)",
+              }}>
+                {/* Avatar */}
+                <div style={{
+                  width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: "0.85rem", fontWeight: 700, color: "var(--text2)",
+                }}>
+                  {s.username[0].toUpperCase()}
+                </div>
+
+                {/* Info */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem" }}>
+                    <span style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--text)" }}>
+                      {s.username}
+                    </span>
+                    <span style={{
+                      fontSize: "0.7rem", fontWeight: 700,
+                      color: p >= 70 ? "var(--green)" : p >= 40 ? "var(--orange)" : "var(--red)",
+                      background: (p >= 70 ? "var(--green)" : p >= 40 ? "var(--orange)" : "var(--red)") + "15",
+                      padding: "0.05rem 0.45rem", borderRadius: "999px",
+                    }}>
+                      {s.correct}/{s.total} · {p}%
+                    </span>
+                  </div>
+                  {/* Topics */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
+                    {(s.topics ?? []).map(t => {
+                      const tc = getTopicColor(t);
+                      return (
+                        <span key={t} style={{
+                          fontSize: "0.6rem", fontWeight: 600,
+                          color: tc, background: tc + "18",
+                          border: `1px solid ${tc}30`,
+                          padding: "0.05rem 0.4rem", borderRadius: "999px",
+                        }}>{t}</span>
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: "0.65rem", color: "var(--text3)", marginTop: "0.15rem" }}>
+                    {new Date(s.created_at).toLocaleString("pt-BR")}
+                  </div>
+                </div>
+
+                {/* Delete */}
+                <button
+                  className="icon-btn danger"
+                  title="Deletar entrada"
+                  onClick={() => setConfirmId(s.id)}
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Confirm single delete */}
+      {confirmId && (
+        <div className="modal-overlay" onClick={() => !deleting && setConfirmId(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: "0.5rem" }}>Deletar esta entrada?</h3>
+            <p style={{ marginBottom: "1.5rem", fontSize: "0.9rem" }}>Essa ação não pode ser desfeita.</p>
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <button className="btn btn-ghost btn-full" onClick={() => setConfirmId(null)} disabled={deleting}>Cancelar</button>
+              <button className="btn btn-danger btn-full" onClick={() => handleDelete(confirmId)} disabled={deleting}>
+                {deleting ? "Deletando..." : "Deletar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm delete all */}
+      {confirmAll && (
+        <div className="modal-overlay" onClick={() => !deleting && setConfirmAll(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: "0.5rem" }}>
+              Deletar {filtered.length} entrada{filtered.length !== 1 ? "s" : ""}?
+            </h3>
+            <p style={{ marginBottom: "1.5rem", fontSize: "0.9rem" }}>
+              {selectedTopic
+                ? `Todas as entradas do tema "${selectedTopic}" serão removidas.`
+                : "Todo o ranking será apagado. Essa ação não pode ser desfeita."}
+            </p>
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <button className="btn btn-ghost btn-full" onClick={() => setConfirmAll(false)} disabled={deleting}>Cancelar</button>
+              <button className="btn btn-danger btn-full" onClick={handleDeleteAll} disabled={deleting}>
+                {deleting ? "Deletando..." : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
 // MAIN ADMIN PANEL
 // ══════════════════════════════════════════════════════════════
 export default function AdminPanel() {
@@ -583,6 +823,9 @@ export default function AdminPanel() {
           <TabBtn active={activeTab === "users"} onClick={() => setActiveTab("users")}>
             👥 Usuários
           </TabBtn>
+          <TabBtn active={activeTab === "ranking"} onClick={() => setActiveTab("ranking")}>
+            🏆 Ranking
+          </TabBtn>
         </div>
 
         {activeTab === "questions" && (
@@ -596,7 +839,8 @@ export default function AdminPanel() {
           />
         )}
 
-        {activeTab === "users" && <UsersTab />}
+        {activeTab === "users"   && <UsersTab />}
+        {activeTab === "ranking" && <RankingTab />}
 
         <div style={{ height: "1rem" }} />
       </div>
