@@ -5,64 +5,71 @@ import { useQuiz } from "../contexts/QuizContext";
 import { getTopicColor } from "../data/defaultQuestions";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
-const MIN_PCT_TO_RANK = 0.30;
 
 function pct(correct, total) {
   if (!total) return 0;
   return Math.round((correct / total) * 100);
 }
 
-function getLevel(totalAnswered) {
-  if (totalAnswered >= 200) return { label: "Mestre",        emoji: "🔥", color: "#f59e0b" };
-  if (totalAnswered >= 100) return { label: "Avançado",      emoji: "⚡", color: "#8b5cf6" };
-  if (totalAnswered >=  50) return { label: "Intermediário", emoji: "📈", color: "#3b82f6" };
-  if (totalAnswered >=  20) return { label: "Iniciante",     emoji: "🌱", color: "#10b981" };
-  return                           { label: "Novato",        emoji: "🐣", color: "#94a3b8" };
+function pctColor(p) {
+  if (p >= 70) return "var(--green)";
+  if (p >= 40) return "var(--orange)";
+  return "var(--red)";
 }
 
 /**
- * Agrega todas as linhas brutas em um Map<username, {correct, total, topics}>
- * Se selectedTopic for passado, considera apenas linhas que incluem esse tópico
- * e soma somente o correct/total dessas linhas.
+ * Deduplica e agrega todas as linhas por usuário.
+ * selectedTopic: se passado, soma apenas sessões que incluem esse tópico.
+ * maxTotal: teto para evitar inflação por duplicatas.
  */
-function aggregate(rawRows, selectedTopic = "") {
+function aggregate(rawRows, selectedTopic, maxTotal) {
+  const seen = new Set();
+  const deduped = rawRows.filter(row => {
+    const key = `${row.username}|${row.correct}|${row.total}|${JSON.stringify(row.topics)}|${row.created_at}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
   const map = new Map();
-
-  for (const row of rawRows) {
+  for (const row of deduped) {
     const rowTopics = Array.isArray(row.topics) ? row.topics : [];
-
-    // Geral: soma tudo. Por tópico: só soma sessões que têm aquele tópico
     if (selectedTopic && !rowTopics.includes(selectedTopic)) continue;
 
-    const existing = map.get(row.username);
-    if (!existing) {
+    const ex = map.get(row.username);
+    if (!ex) {
       map.set(row.username, {
         username: row.username,
-        correct:  row.correct  ?? 0,
-        total:    row.total    ?? 0,
+        correct:  row.correct ?? 0,
+        total:    row.total   ?? 0,
         topics:   [...rowTopics],
       });
     } else {
-      existing.correct += row.correct ?? 0;
-      existing.total   += row.total   ?? 0;
-      // União de tópicos (sem duplicatas)
+      ex.correct += row.correct ?? 0;
+      ex.total   += row.total   ?? 0;
       for (const t of rowTopics) {
-        if (!existing.topics.includes(t)) existing.topics.push(t);
+        if (!ex.topics.includes(t)) ex.topics.push(t);
       }
     }
   }
 
-  return [...map.values()];
+  return [...map.values()].map(s => {
+    if (maxTotal > 0 && s.total > maxTotal) {
+      const ratio = maxTotal / s.total;
+      return { ...s, correct: Math.round(s.correct * ratio), total: maxTotal };
+    }
+    return s;
+  });
 }
 
 function ScoreRow({ s, rank, isMe, totalQuestions }) {
-  const p      = pct(s.correct, s.total);
-  const level  = getLevel(s.total);
-  const topics = s.topics ?? [];
+  const p         = pct(s.correct, s.total);
+  const color     = pctColor(p);
+  const topics    = s.topics ?? [];
   const rankColor = rank === 1 ? "#f59e0b" : rank === 2 ? "#94a3b8" : rank === 3 ? "#cd7c54" : "var(--text3)";
   const [expanded, setExpanded] = useState(false);
 
-  const overallPct = totalQuestions > 0
+  const coveredPct = totalQuestions > 0
     ? Math.min(100, Math.round((s.total / totalQuestions) * 100))
     : 0;
 
@@ -73,11 +80,12 @@ function ScoreRow({ s, rank, isMe, totalQuestions }) {
       border: `1px solid ${isMe ? "var(--blue)" : "var(--border)"}`,
       overflow: "hidden",
     }}>
+      {/* Linha principal */}
       <div
         style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.85rem 1rem", cursor: "pointer" }}
         onClick={() => setExpanded(e => !e)}
       >
-        {/* Rank */}
+        {/* Badge rank */}
         <div style={{
           width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
           background: rank <= 3 ? rankColor + "20" : "var(--bg3)",
@@ -90,7 +98,7 @@ function ScoreRow({ s, rank, isMe, totalQuestions }) {
 
         {/* Nome + barra */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.3rem", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.35rem" }}>
             <span style={{
               fontSize: "0.9rem", fontWeight: isMe ? 700 : 600,
               color: isMe ? "var(--blue)" : "var(--text)",
@@ -105,31 +113,24 @@ function ScoreRow({ s, rank, isMe, totalQuestions }) {
                 borderRadius: "999px", flexShrink: 0,
               }}>você</span>
             )}
-            <span style={{
-              fontSize: "0.6rem", fontWeight: 700,
-              color: level.color, background: level.color + "18",
-              border: `1px solid ${level.color}30`,
-              padding: "0.1rem 0.45rem", borderRadius: "999px", flexShrink: 0,
-            }}>
-              {level.emoji} {level.label}
-            </span>
           </div>
-          <div style={{ height: 4, background: "var(--border)", borderRadius: 99 }}>
+          <div style={{ height: 5, background: "var(--border)", borderRadius: 99 }}>
             <div style={{
               height: "100%", borderRadius: 99, width: `${p}%`,
-              background: p >= 70 ? "var(--green)" : p >= 40 ? "var(--orange)" : "var(--red)",
+              background: color,
               transition: "width 0.5s ease",
             }} />
           </div>
         </div>
 
         {/* Placar */}
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text)" }}>
-            {s.correct}
-            <span style={{ fontSize: "0.7rem", color: "var(--text3)", fontWeight: 400 }}>/{s.total}</span>
+        <div style={{ textAlign: "right", flexShrink: 0, minWidth: 56 }}>
+          <div style={{ fontSize: "1rem", fontWeight: 700, color }}>
+            {p}%
           </div>
-          <div style={{ fontSize: "0.72rem", color: "var(--text3)" }}>{p}%</div>
+          <div style={{ fontSize: "0.7rem", color: "var(--text3)" }}>
+            {s.correct}/{s.total}
+          </div>
         </div>
 
         <div style={{
@@ -138,45 +139,40 @@ function ScoreRow({ s, rank, isMe, totalQuestions }) {
         }}>▾</div>
       </div>
 
-      {/* Expandido */}
+      {/* Painel expandido */}
       {expanded && (
         <div style={{ borderTop: "1px solid var(--border)", padding: "0.75rem 1rem", background: "var(--bg3)" }}>
 
-          {/* Progresso geral */}
-          <div style={{ marginBottom: "0.6rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text3)", marginBottom: "0.25rem" }}>
-              <span>📚 Questões respondidas</span>
-              <span style={{ fontWeight: 700, color: "var(--text2)" }}>{s.total} / {totalQuestions} ({overallPct}%)</span>
-            </div>
-            <div style={{ height: 4, background: "var(--border)", borderRadius: 99 }}>
-              <div style={{ height: "100%", borderRadius: 99, width: `${overallPct}%`, background: level.color, transition: "width 0.5s" }} />
-            </div>
+          {/* Cards acertos/erros/% */}
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+            {[
+              { label: "acertos",   val: s.correct,            c: "var(--green)" },
+              { label: "erros",     val: s.total - s.correct,  c: "var(--red)"   },
+              { label: "aproveit.", val: `${p}%`,               c: color          },
+            ].map(item => (
+              <div key={item.label} style={{
+                flex: 1, borderRadius: "var(--radius-sm)", padding: "0.5rem",
+                background: item.c + "10", border: `1px solid ${item.c}30`,
+                textAlign: "center",
+              }}>
+                <div style={{ fontSize: "1.05rem", fontWeight: 700, color: item.c }}>{item.val}</div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text3)" }}>{item.label}</div>
+              </div>
+            ))}
           </div>
 
-          {/* Próximo nível */}
-          {(() => {
-            const thresholds = [20, 50, 100, 200];
-            const next = thresholds.find(t => t > s.total);
-            if (!next) return (
-              <div style={{ fontSize: "0.72rem", color: "#f59e0b", fontWeight: 600, marginBottom: "0.5rem" }}>
-                🔥 Nível máximo atingido!
-              </div>
-            );
-            const prev     = thresholds[thresholds.indexOf(next) - 1] ?? 0;
-            const prog     = Math.round(((s.total - prev) / (next - prev)) * 100);
-            const nextLvl  = getLevel(next);
-            return (
-              <div style={{ marginBottom: "0.6rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text3)", marginBottom: "0.25rem" }}>
-                  <span>⬆️ Próximo: {nextLvl.emoji} {nextLvl.label}</span>
-                  <span style={{ fontWeight: 700, color: "var(--text2)" }}>{next - s.total} restantes</span>
-                </div>
-                <div style={{ height: 4, background: "var(--border)", borderRadius: 99 }}>
-                  <div style={{ height: "100%", borderRadius: 99, width: `${prog}%`, background: nextLvl.color, transition: "width 0.5s" }} />
-                </div>
-              </div>
-            );
-          })()}
+          {/* Cobertura do banco */}
+          <div style={{ marginBottom: "0.6rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text3)", marginBottom: "0.25rem" }}>
+              <span>📚 Questões tentadas</span>
+              <span style={{ fontWeight: 700, color: "var(--text2)" }}>
+                {s.total} / {totalQuestions} ({coveredPct}%)
+              </span>
+            </div>
+            <div style={{ height: 4, background: "var(--border)", borderRadius: 99 }}>
+              <div style={{ height: "100%", borderRadius: 99, width: `${coveredPct}%`, background: "var(--blue)", transition: "width 0.5s" }} />
+            </div>
+          </div>
 
           {/* Temas */}
           {topics.length > 0 && (
@@ -225,7 +221,8 @@ export default function Ranking() {
     try {
       const { data, error } = await supabase
         .from("scores")
-        .select("username, correct, total, topics")
+        .select("username, correct, total, topics, created_at")
+        .order("created_at", { ascending: true })
         .limit(5000);
       if (error) throw error;
       setRawRows(data ?? []);
@@ -237,7 +234,6 @@ export default function Ranking() {
     }
   }
 
-  // Total de questões objetivas por tópico (para calcular mínimo)
   const totalByTopic = useMemo(() => {
     const map = {};
     for (const q of questions) {
@@ -255,71 +251,32 @@ export default function Ranking() {
     [...new Set(questions.map(q => q.topic))].sort(),
   [questions]);
 
-  // Agrega e ordena
+  const maxForFilter = selectedTopic
+    ? (totalByTopic[selectedTopic] ?? 0)
+    : totalObjectiveQuestions;
+
   const scores = useMemo(() => {
-    let entries = aggregate(rawRows, selectedTopic);
+    const entries = aggregate(rawRows, selectedTopic, maxForFilter)
+      .filter(s => s.total >= 1);
 
-    // Filtro mínimo por tópico
-    if (selectedTopic) {
-      const topicTotal = totalByTopic[selectedTopic] ?? 0;
-      const minQ       = topicTotal > 0 ? Math.ceil(topicTotal * MIN_PCT_TO_RANK) : 1;
-      entries = entries.filter(s => s.total >= minQ);
-    }
-
-    // Ordena: % desc, depois acertos absolutos desc
     return entries.sort((a, b) => {
       const pa = pct(a.correct, a.total);
       const pb = pct(b.correct, b.total);
-      return pb !== pa ? pb - pa : b.correct - a.correct;
+      if (pb !== pa) return pb - pa;
+      if (b.correct !== a.correct) return b.correct - a.correct;
+      return b.total - a.total;
     });
-  }, [rawRows, selectedTopic, totalByTopic]);
+  }, [rawRows, selectedTopic, maxForFilter]);
 
   const myRank  = scores.findIndex(s => s.username === username) + 1;
   const myScore = myRank > 0 ? scores[myRank - 1] : null;
-
-  const minQForTopic = selectedTopic
-    ? Math.ceil((totalByTopic[selectedTopic] ?? 0) * MIN_PCT_TO_RANK)
-    : 0;
-
-  // Quanto o usuário já respondeu neste tópico (para barra de progresso no aviso)
-  const myDoneInTopic = useMemo(() => {
-    if (!selectedTopic || !username) return 0;
-    return rawRows
-      .filter(r => r.username === username && (r.topics ?? []).includes(selectedTopic))
-      .reduce((acc, r) => acc + (r.total ?? 0), 0);
-  }, [rawRows, selectedTopic, username]);
 
   return (
     <div className="page">
       <div style={{ textAlign: "center", padding: "2rem 0 1rem" }}>
         <div style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>🏆</div>
         <h1 style={{ marginBottom: "0.25rem" }}>Ranking</h1>
-        <p style={{ fontSize: "0.9rem" }}>Os melhores alunos do quiz</p>
-      </div>
-
-      {/* Legenda de níveis */}
-      <div style={{
-        marginBottom: "1.25rem", padding: "0.6rem 0.9rem",
-        borderRadius: "var(--radius-sm)", background: "var(--bg3)",
-        border: "1px solid var(--border)",
-        display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center",
-      }}>
-        {[
-          { label: "Novato",        emoji: "🐣", color: "#94a3b8", min: 0   },
-          { label: "Iniciante",     emoji: "🌱", color: "#10b981", min: 20  },
-          { label: "Intermediário", emoji: "📈", color: "#3b82f6", min: 50  },
-          { label: "Avançado",      emoji: "⚡", color: "#8b5cf6", min: 100 },
-          { label: "Mestre",        emoji: "🔥", color: "#f59e0b", min: 200 },
-        ].map(l => (
-          <span key={l.label} style={{
-            fontSize: "0.65rem", fontWeight: 600,
-            color: l.color, background: l.color + "15",
-            border: `1px solid ${l.color}30`,
-            padding: "0.15rem 0.5rem", borderRadius: "999px",
-          }}>
-            {l.emoji} {l.label} ({l.min}+)
-          </span>
-        ))}
+        <p style={{ fontSize: "0.9rem" }}>Ordenado por % de acerto</p>
       </div>
 
       {/* Filtro por tópico */}
@@ -356,13 +313,6 @@ export default function Ranking() {
               );
             })}
           </div>
-          {selectedTopic && minQForTopic > 0 && (
-            <div style={{ marginTop: "0.6rem", fontSize: "0.75rem", color: "var(--text3)", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-              <span>⚡ Mínimo para entrar:</span>
-              <strong style={{ color: "var(--text2)" }}>{minQForTopic} questões</strong>
-              <span>({Math.round(MIN_PCT_TO_RANK * 100)}% de {totalByTopic[selectedTopic] ?? "?"})</span>
-            </div>
-          )}
         </div>
       )}
 
@@ -379,54 +329,11 @@ export default function Ranking() {
             {myRank <= 3 ? MEDALS[myRank - 1] : `#${myRank}`}
           </div>
           <p style={{ fontSize: "0.85rem", color: "var(--text2)", marginTop: "0.15rem" }}>
-            {myScore.correct} acertos de {myScore.total} questões — {pct(myScore.correct, myScore.total)}%
+            {myScore.correct} acertos de {myScore.total} tentadas —{" "}
+            <strong style={{ color: pctColor(pct(myScore.correct, myScore.total)) }}>
+              {pct(myScore.correct, myScore.total)}%
+            </strong>
           </p>
-          {(() => {
-            const level = getLevel(myScore.total);
-            return (
-              <span style={{
-                display: "inline-block", marginTop: "0.4rem",
-                fontSize: "0.7rem", fontWeight: 700,
-                color: level.color, background: level.color + "18",
-                border: `1px solid ${level.color}30`,
-                padding: "0.15rem 0.6rem", borderRadius: "999px",
-              }}>
-                {level.emoji} {level.label}
-              </span>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* Usuário não atingiu mínimo */}
-      {username && selectedTopic && myRank === 0 && !loading && minQForTopic > 0 && (
-        <div className="card" style={{
-          marginBottom: "1.25rem", textAlign: "center",
-          background: "rgba(245,158,11,0.08)", borderColor: "var(--orange)",
-        }}>
-          <p style={{ fontSize: "0.8rem", color: "var(--orange)", fontWeight: 600 }}>
-            ⚡ Você ainda não entrou neste ranking
-          </p>
-          <p style={{ fontSize: "0.8rem", color: "var(--text3)", marginTop: "0.25rem" }}>
-            {myDoneInTopic > 0
-              ? <>Faltam <strong style={{ color: "var(--text2)" }}>{minQForTopic - myDoneInTopic}</strong> questões de <strong style={{ color: getTopicColor(selectedTopic) }}>{selectedTopic}</strong></>
-              : <>Responda <strong style={{ color: "var(--text2)" }}>{minQForTopic} questões</strong> de <strong style={{ color: getTopicColor(selectedTopic) }}>{selectedTopic}</strong> para entrar</>
-            }
-          </p>
-          {myDoneInTopic > 0 && (
-            <div style={{ marginTop: "0.5rem" }}>
-              <div style={{ height: 4, background: "var(--border)", borderRadius: 99, overflow: "hidden" }}>
-                <div style={{
-                  height: "100%", borderRadius: 99,
-                  width: `${Math.min(100, Math.round((myDoneInTopic / minQForTopic) * 100))}%`,
-                  background: "var(--orange)",
-                }} />
-              </div>
-              <span style={{ fontSize: "0.7rem", color: "var(--text3)", marginTop: "0.25rem", display: "block" }}>
-                {myDoneInTopic} / {minQForTopic}
-              </span>
-            </div>
-          )}
         </div>
       )}
 
@@ -444,7 +351,7 @@ export default function Ranking() {
         </div>
       )}
 
-      {/* Loading */}
+      {/* Loading skeleton */}
       {loading && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
           {[1,2,3,4,5].map(i => (
@@ -460,11 +367,7 @@ export default function Ranking() {
       {!loading && scores.length === 0 && (
         <div style={{ textAlign: "center", padding: "3rem 0", color: "var(--text3)" }}>
           <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>📭</div>
-          <p>
-            {selectedTopic
-              ? `Ninguém atingiu o mínimo em "${selectedTopic}" ainda.`
-              : "Nenhuma pontuação ainda. Seja o primeiro!"}
-          </p>
+          <p>{selectedTopic ? `Ninguém respondeu "${selectedTopic}" ainda.` : "Nenhuma pontuação ainda. Seja o primeiro!"}</p>
         </div>
       )}
 
@@ -480,7 +383,7 @@ export default function Ranking() {
               s={s}
               rank={i + 1}
               isMe={s.username === username}
-              totalQuestions={totalObjectiveQuestions}
+              totalQuestions={maxForFilter}
             />
           ))}
         </div>

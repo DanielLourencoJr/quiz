@@ -8,6 +8,7 @@ import { useUser } from "../contexts/UserContext";
 
 const TYPE_LABEL = { mc: "Múltipla Escolha", tf: "Verdadeiro ou Falso", essay: "Dissertativa" };
 const TYPE_ICON  = { mc: "◉", tf: "⊙", essay: "✎" };
+const AUTO_ADVANCE_MS = 1400; // ms para avançar automaticamente após responder
 
 function BackIcon() {
   return (
@@ -34,83 +35,56 @@ export default function QuizPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions]);
 
-  const [idx, setIdx]           = useState(0);
-  const [answers, setAnswers]   = useState({});
+  const [idx, setIdx]         = useState(0);
+  const [answers, setAnswers] = useState({});
   const [revealed, setRevealed] = useState({});
-  const [essays, setEssays]     = useState({});
-  const [models, setModels]     = useState({});
+  const [essays, setEssays]   = useState({});
+  const [models, setModels]   = useState({});
 
-  // Ref sempre atualizado com o estado mais recente (para uso no cleanup/beforeunload)
   const stateRef = useRef({ answers: {}, pending, username });
   useEffect(() => {
     stateRef.current = { answers, pending, username };
   }, [answers, pending, username]);
 
-  // Flag para evitar double-save (saída + chegada em Results)
-  const savedRef = useRef(false);
+  const savedRef    = useRef(false);
+  const autoTimerRef = useRef(null);
 
-  // ── Função de save parcial ──────────────────────────────────────────────────
+  // ── Save parcial ao sair ─────────────────────────────────────────────────
   const savePartial = useCallback(async (currentAnswers, currentPending, currentUsername) => {
     if (savedRef.current) return;
-
     const objQs   = currentPending.filter(q => q.type !== "essay");
     const answered = objQs.filter(q => currentAnswers[q.id] !== undefined);
-
-    // Só salva se houve pelo menos 1 resposta objetiva
     if (!currentUsername || answered.length === 0) return;
-
     savedRef.current = true;
 
     const correct = answered.filter(q => currentAnswers[q.id] === q.answer).length;
     const total   = answered.length;
     const topics  = [...new Set(answered.map(q => q.topic))];
 
-    const payload = { username: currentUsername, correct, total, topics };
-    console.log("[QuizPage] Salvando saída parcial:", payload);
-
     try {
-      const { error } = await supabase.from("scores").insert([payload]);
-      if (error) console.error("[QuizPage] Erro ao salvar parcial:", error);
-      else console.log("[QuizPage] Parcial salvo OK");
+      const { error } = await supabase.from("scores").insert([{ username: currentUsername, correct, total, topics }]);
+      if (error) console.error("[QuizPage] Erro save parcial:", error);
     } catch (err) {
-      console.error("[QuizPage] Exceção ao salvar parcial:", err);
+      console.error("[QuizPage] Exceção save parcial:", err);
     }
   }, []);
 
-  // ── Save síncrono via sendBeacon (para fechar aba/janela) ──────────────────
-  // sendBeacon é o único método que funciona com garantia no beforeunload
   const saveBeacon = useCallback(() => {
     if (savedRef.current) return;
     const { answers: ans, pending: pend, username: user } = stateRef.current;
-
     const objQs   = pend.filter(q => q.type !== "essay");
     const answered = objQs.filter(q => ans[q.id] !== undefined);
     if (!user || answered.length === 0) return;
-
     savedRef.current = true;
 
     const correct = answered.filter(q => ans[q.id] === q.answer).length;
     const total   = answered.length;
     const topics  = [...new Set(answered.map(q => q.topic))];
 
-    // sendBeacon funciona mesmo durante o unload da página
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-    const blob = new Blob(
-      [JSON.stringify({ username: user, correct, total, topics })],
-      { type: "application/json" }
-    );
-    navigator.sendBeacon(
-      `${supabaseUrl}/rest/v1/scores`,
-      // sendBeacon não suporta headers customizados nativamente,
-      // então usamos fetch em keepalive como fallback mais confiável
-    );
-
-    // Fallback keepalive (funciona na maioria dos casos modernos)
     fetch(`${supabaseUrl}/rest/v1/scores`, {
-      method: "POST",
-      keepalive: true,          // ← chave: mantém a requisição mesmo após unload
+      method: "POST", keepalive: true,
       headers: {
         "Content-Type": "application/json",
         "apikey": supabaseKey,
@@ -118,26 +92,21 @@ export default function QuizPage() {
         "Prefer": "return=minimal",
       },
       body: JSON.stringify({ username: user, correct, total, topics }),
-    }).catch(() => {}); // silencia erros (página pode já estar fechando)
+    }).catch(() => {});
   }, []);
 
-  // ── Registra os listeners de saída ────────────────────────────────────────
   useEffect(() => {
-    // Fechar aba / F5 / navegar para outra origem
     window.addEventListener("beforeunload", saveBeacon);
-
     return () => {
       window.removeEventListener("beforeunload", saveBeacon);
-
-      // Navegar para outra rota dentro do app (voltar, ir pro ranking, etc.)
-      // Só salva se ainda não foi salvo (ex: não veio de goNext → Results)
+      clearTimeout(autoTimerRef.current);
       const { answers: ans, pending: pend, username: user } = stateRef.current;
       savePartial(ans, pend, user);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Lógica normal do quiz ─────────────────────────────────────────────────
+  // ── Lógica do quiz ───────────────────────────────────────────────────────
   if (pending.length === 0) {
     return (
       <div className="page" style={{ alignItems: "center", justifyContent: "center", textAlign: "center", gap: "1rem" }}>
@@ -155,23 +124,17 @@ export default function QuizPage() {
 
   const q          = pending[idx];
   const total      = pending.length;
-  const progress   = (idx / total) * 100;
+  const progress   = ((idx + 1) / total) * 100;
   const topicColor = getTopicColor(q.topic);
   const isLast     = idx === total - 1;
   const isRevealed = !!revealed[q.id];
   const chosen     = answers[q.id];
   const isCorrect  = isRevealed && chosen === q.answer;
 
-  function answer(val) {
-    if (revealed[q.id]) return;
-    setAnswers(a => ({ ...a, [q.id]: val }));
-    setRevealed(r => ({ ...r, [q.id]: true }));
-  }
-
   function goNext() {
+    clearTimeout(autoTimerRef.current);
     markAnswered(q.id);
     if (isLast) {
-      // Marca como salvo para o cleanup do useEffect não salvar de novo
       savedRef.current = true;
       navigate("/results", { state: { answers, essays, questions: pending } });
     } else {
@@ -180,7 +143,27 @@ export default function QuizPage() {
     }
   }
 
+  function answer(val) {
+    if (revealed[q.id]) return;
+    const newAnswers = { ...answers, [q.id]: val };
+    setAnswers(newAnswers);
+    setRevealed(r => ({ ...r, [q.id]: true }));
+
+    // Auto-avança após AUTO_ADVANCE_MS (exceto em dissertativa)
+    autoTimerRef.current = setTimeout(() => {
+      markAnswered(q.id);
+      if (isLast) {
+        savedRef.current = true;
+        navigate("/results", { state: { answers: newAnswers, essays, questions: pending } });
+      } else {
+        setIdx(i => i + 1);
+        window.scrollTo(0, 0);
+      }
+    }, AUTO_ADVANCE_MS);
+  }
+
   function goPrev() {
+    clearTimeout(autoTimerRef.current);
     if (idx > 0) { setIdx(i => i - 1); window.scrollTo(0, 0); }
   }
 
@@ -202,9 +185,7 @@ export default function QuizPage() {
                 </span>
               )}
             </span>
-            <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>
-              {Math.round(progress)}%
-            </span>
+            <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>{Math.round(progress)}%</span>
           </div>
           <div className="progress-bar">
             <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
@@ -213,7 +194,7 @@ export default function QuizPage() {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, padding: "1rem", paddingBottom: "6rem" }}>
+      <div style={{ flex: 1, padding: "1rem", paddingBottom: "5rem" }}>
 
         {/* Topic + type */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", flexWrap: "wrap" }}>
@@ -274,6 +255,56 @@ export default function QuizPage() {
           </div>
         )}
 
+        {/* Feedback imediato + barra de progresso do auto-avanço */}
+        {isRevealed && q.type !== "essay" && (
+          <div style={{ marginTop: "0.75rem" }}>
+            {/* Explicação */}
+            {q.explanation && (
+              <div className={`explanation ${isCorrect ? "correct" : "wrong"}`}>
+                <span className="explanation-label">{isCorrect ? "✓ CORRETO!" : "✗ INCORRETO"}</span>
+                {q.explanation}
+              </div>
+            )}
+            {!q.explanation && (
+              <div style={{
+                padding: "0.65rem 1rem",
+                borderRadius: "var(--radius-sm)",
+                background: isCorrect ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+                border: `1px solid ${isCorrect ? "var(--green)" : "var(--red)"}40`,
+                fontSize: "0.9rem", fontWeight: 700,
+                color: isCorrect ? "var(--green)" : "var(--red)",
+              }}>
+                {isCorrect ? "✓ Correto!" : "✗ Incorreto"}
+              </div>
+            )}
+
+            {/* Barra de auto-avanço */}
+            <div style={{ marginTop: "0.6rem", display: "flex", alignItems: "center", gap: "0.6rem" }}>
+              <div style={{ flex: 1, height: 3, background: "var(--border)", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: 99,
+                  background: topicColor,
+                  animation: `shrink ${AUTO_ADVANCE_MS}ms linear forwards`,
+                }} />
+              </div>
+              <button
+                onClick={goNext}
+                style={{
+                  fontSize: "0.75rem", fontWeight: 700,
+                  color: topicColor, cursor: "pointer",
+                  border: `1px solid ${topicColor}50`,
+                  borderRadius: "var(--radius-sm)",
+                  padding: "0.2rem 0.6rem",
+                  background: topicColor + "15",
+                  flexShrink: 0,
+                }}
+              >
+                {isLast ? "Ver resultado →" : "Próxima →"}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Essay */}
         {q.type === "essay" && (
           <div>
@@ -322,40 +353,37 @@ export default function QuizPage() {
                 <p style={{ color: "var(--text)", fontSize: "0.9rem", lineHeight: "1.65" }}>{q.model}</p>
               </div>
             )}
+
+            {/* Botão manual para dissertativa */}
+            <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+              {idx > 0 && (
+                <button className="btn btn-ghost" onClick={goPrev} style={{ flex: "none" }}>← Anterior</button>
+              )}
+              <button
+                className={`btn btn-full ${isLast ? "btn-primary" : "btn-ghost"}`}
+                onClick={goNext}
+                style={{
+                  flex: 1,
+                  background: isLast ? "linear-gradient(135deg,var(--blue),var(--purple))" : undefined,
+                  color: isLast ? "#fff" : undefined,
+                  border: isLast ? "none" : undefined,
+                }}
+              >
+                {isLast ? "Ver Resultado →" : "Próxima →"}
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Explanation */}
-        {isRevealed && q.type !== "essay" && q.explanation && (
-          <div className={`explanation ${isCorrect ? "correct" : "wrong"}`}>
-            <span className="explanation-label">{isCorrect ? "✓ CORRETO!" : "✗ INCORRETO"}</span>
-            {q.explanation}
+        {/* Navegação anterior (mc/tf não reveladas) */}
+        {q.type !== "essay" && !isRevealed && idx > 0 && (
+          <div style={{ marginTop: "1.5rem" }}>
+            <button className="btn btn-ghost" onClick={goPrev}>← Anterior</button>
           </div>
         )}
-
-        {/* Nav */}
-        <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.5rem" }}>
-          {idx > 0 && (
-            <button className="btn btn-ghost" onClick={goPrev} style={{ flex: "none" }}>
-              ← Anterior
-            </button>
-          )}
-          <button
-            className={`btn btn-full ${isLast ? "btn-primary" : "btn-ghost"}`}
-            onClick={goNext}
-            style={{
-              flex: 1,
-              background: isLast ? "linear-gradient(135deg,var(--blue),var(--purple))" : undefined,
-              color: isLast ? "#fff" : undefined,
-              border: isLast ? "none" : undefined,
-            }}
-          >
-            {isLast ? "Ver Resultado →" : "Próxima →"}
-          </button>
-        </div>
 
         {/* Dot nav */}
-        <div style={{ display: "flex", justifyContent: "center", gap: "4px", marginTop: "1rem", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", justifyContent: "center", gap: "4px", marginTop: "1.25rem", flexWrap: "wrap" }}>
           {pending.map((qq, i) => {
             const done = qq.type === "essay"
               ? !!essays[qq.id]?.trim()
@@ -363,7 +391,7 @@ export default function QuizPage() {
             return (
               <button
                 key={i}
-                onClick={() => { setIdx(i); window.scrollTo(0, 0); }}
+                onClick={() => { clearTimeout(autoTimerRef.current); setIdx(i); window.scrollTo(0, 0); }}
                 style={{
                   width: "8px", height: "8px", borderRadius: "50%",
                   background: i === idx ? topicColor : done ? "var(--border2)" : "var(--border)",
@@ -374,6 +402,14 @@ export default function QuizPage() {
           })}
         </div>
       </div>
+
+      {/* CSS da animação de shrink inline */}
+      <style>{`
+        @keyframes shrink {
+          from { width: 100%; }
+          to   { width: 0%; }
+        }
+      `}</style>
     </div>
   );
 }

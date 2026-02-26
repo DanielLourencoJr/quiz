@@ -95,7 +95,6 @@ export default function Home() {
   }
 
   async function handleResetConfirmed() {
-    console.log("Resetando usuário:", username); // ← adiciona isso
     setResetting(true);
     setResetError("");
 
