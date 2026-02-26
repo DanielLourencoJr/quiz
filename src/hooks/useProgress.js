@@ -21,12 +21,14 @@ export function useProgress() {
   const [progress, setProgress] = useState(() => load());
 
   const markAnswered = useCallback((questionId) => {
-    setProgress(prev => {
-      if (prev.answered.includes(questionId)) return prev;
-      const next = { ...prev, answered: [...prev.answered, questionId] };
-      save(next);
-      return next;
-    });
+    // Escreve no localStorage de forma síncrona, ANTES do setState
+    const current = load();
+    if (current.answered.includes(questionId)) return;
+    const next = { ...current, answered: [...current.answered, questionId] };
+    save(next);
+  
+    // Depois atualiza o React state
+    setProgress(next);
   }, []);
 
   const resetProgress = useCallback(() => {
