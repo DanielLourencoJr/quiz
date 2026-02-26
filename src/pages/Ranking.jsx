@@ -136,7 +136,7 @@ export default function Ranking() {
     return [...set].sort();
   }, [allScores]);
 
-  // Filtra e agrupa por username → melhor score no tema selecionado
+  // Filtra e agrupa por username
   const scores = useMemo(() => {
     let rows = allScores;
 
@@ -145,14 +145,34 @@ export default function Ranking() {
       rows = rows.filter(s => (s.topics ?? []).includes(selectedTopic));
     }
 
-    // Melhor score por username
     const map = new Map();
     for (const row of rows) {
       const existing = map.get(row.username);
-      const rowPct   = pct(row.correct, row.total);
-      const exPct    = existing ? pct(existing.correct, existing.total) : -1;
-      if (!existing || rowPct > exPct || (rowPct === exPct && row.correct > existing.correct)) {
-        map.set(row.username, row);
+
+      if (!selectedTopic) {
+        // Modo Geral: SOMA correct e total de todos os registros do usuário
+        // e acumula todos os temas (sem repetição)
+        if (!existing) {
+          map.set(row.username, {
+            ...row,
+            correct: row.correct,
+            total: row.total,
+            topics: [...(row.topics ?? [])],
+          });
+        } else {
+          existing.correct += row.correct;
+          existing.total   += row.total;
+          for (const t of row.topics ?? []) {
+            if (!existing.topics.includes(t)) existing.topics.push(t);
+          }
+        }
+      } else {
+        // Modo tema: melhor score naquele tema
+        const rowPct = pct(row.correct, row.total);
+        const exPct  = existing ? pct(existing.correct, existing.total) : -1;
+        if (!existing || rowPct > exPct || (rowPct === exPct && row.correct > existing.correct)) {
+          map.set(row.username, row);
+        }
       }
     }
 
